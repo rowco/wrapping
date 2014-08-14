@@ -1,0 +1,291 @@
+#! /usr/bin/env python
+# vim: set fileencoding=utf-8 :
+
+import sys,os,time
+import subprocess
+import logging
+import re
+import datetime
+import signal
+import shutil
+import curses
+import math, string
+import locale
+locale.setlocale(locale.LC_ALL,"")
+
+
+def _convert_to_float(i):
+    try:
+        return float(i)
+    except:
+        return None
+
+def sparkify(series):
+
+    spark_chars = u"▁▂▃▄▅▆▇█"
+    #spark_chars = u"▁▂▃▄▅▆▇█"
+
+    series = [ float(i) for i in series ]
+    minimum = min(series)
+    maximum = max(series)
+    data_range = maximum - minimum
+    if data_range == 0.0:
+        # Graph a baseline if every input value is equal.
+        return u''.join([ spark_chars[0] for i in series ])
+    coefficient = (len(spark_chars) - 1.0) / data_range
+    return u''.join([
+        spark_chars[
+            int(round((x - minimum) * coefficient))
+        ] for x in series
+    ])
+
+#1 packets transmitted, 0 packets received, 100.0% packet loss
+#1 packets transmitted, 1 packets received, 0.0% packet loss, 1 packets out of wait time
+#1 packets transmitted, 0 received, 100% packet loss, time 0ms
+#1 packets transmitted, 0 received, +1 errors, 100% packet loss, time 0ms
+summ_re = re.compile('(\d+) packets transmitted, (\d+)(?: packets)? received,(?: \+[\d]+ errors,)* ([\d\.]+)% packet loss(?:, (?:time (\d+[a-z]+)|(\d+) packets out of wait time))?')
+#round-trip min/avg/max/stddev = 1.970/1.970/1.970/0.000 ms\
+#round-trip min/avg/max/stddev = 2.179/2.179/2.179/0.000 ms
+stat_re = re.compile('(?:rtt|round-trip) min/avg/max/(?:mdev|stddev) = ([\d\.]+)/([\d\.]+)/([\d\.]+)/([\d\.]+) [a-z]+')
+
+def pinger(host=None,interval=60,timeout=1,count=1):
+
+    logger = logging.getLogger('pinger')
+
+    cmd = ['ping','-i',str(interval),'-W',str(timeout),'-c',str(count),host]
+
+    results = {
+        'cmd':' '.join(cmd),
+        'stdout':None,
+        'date':datetime.datetime.now(),
+        'sent':'0',
+        'received':'0',
+        'loss':'100',
+        'time':'0',
+        'min':'0',
+        'avg':'0',
+        'max':'0',
+        'mdev':'0',
+        }
+    
+    try:
+        proc = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    except:
+        raise SystemError(' '.join(cmd))
+
+    sleep = float(timeout)*float(count)
+    time.sleep(sleep)
+    
+    proc.send_signal(signal.SIGINT)
+   
+    while proc.poll() is None:
+        pass
+
+    stderr = proc.stderr.read()
+    if stderr:
+        raise SystemError("Got an error: %s" % stderr)
+
+    stats_index = 0
+    stdout = proc.stdout.readlines()
+
+    for l in stdout:
+        if re.search('---',l):
+            stats_index = stdout.index(l)
+            continue
+
+    if stats_index==0:
+        #ping didn't give a stats sectinon
+        #raise SystemError("Unable to capture output.. too fast? [%s]" % stdout)
+        return results
+        
+
+    summ = stdout[stats_index + 1].strip()
+    summ_match = summ_re.match(summ)
+    if not summ_match:
+        raise ValueError('summary regex did not match, check regex [%s]' % summ)
+
+    results['stdout'] = stdout
+    results['sent'] = summ_match.group(1)
+    results['received'] = summ_match.group(2)
+    results['loss'] = summ_match.group(3)
+    results['time'] = summ_match.group(4)
+
+    try:
+        stats = stdout[stats_index + 2].strip()
+        stats_match = stat_re.match(stats)
+        if not stats_match:
+            raise ValueError('stats regex did not match, check regex [%s]' % stats)
+
+        results['min'] = stats_match.group(1)
+        results['avg'] = stats_match.group(2)
+        results['max'] = stats_match.group(3)
+        results['mdev'] = stats_match.group(4)
+    
+    except IndexError:
+        pass        
+    except ValueError:
+        pass
+        raise
+    except:
+        raise
+
+    del(proc)
+    return results
+
+
+def run_pinger(screen):
+
+    if len(sys.argv) < 2:
+        print "Usage: wrapping [host to ping] (optional: max response time) (optional: pings per round)"
+        sys.exit()
+
+    host = sys.argv[1]
+    try:
+        timeout = sys.argv[2]
+    except:
+        timeout = 0.5
+    try:
+        count = sys.argv[3]
+    except:
+        count = 1
+
+    if float(timeout) < 0.01:
+        sys.exit("Sorry, this scripts doesn't work with timeouts less than 10ms")
+
+
+    def fmt_delta(delta):
+        return '%02d:%02d.%06d' % ((delta.seconds//60)%60,delta.seconds,delta.microseconds)
+    
+    def add_activity(c):
+        try:
+            activity.addstr(c)
+        except:
+            activity.clear()
+            activity.addstr(c)
+        activity.noutrefresh()
+
+    def add_log(s):
+        '''
+        Add a log line to the screen
+        scroll pad down if we reach the bottom
+        '''
+        (maxy,maxx) = screen.getmaxyx()
+        log_y = maxy-1
+        scrol_y = log_y -3
+        
+        now = datetime.datetime.now().isoformat()
+        s = now + ": " + s
+        txt_log.append(s)
+        log.addstr(s)
+        (loc_y,loc_x) = log.getyx()
+        if loc_y > scrol_y:
+            pos_y = loc_y - scrol_y
+        else:
+            pos_y = 0
+        
+        log.noutrefresh(pos_y,0,3,0,log_y,maxx)
+
+    def add_spark(s):
+        spark.clear()
+        spark.addstr(s)
+        spark.noutrefresh()
+
+    def add_stats(s):
+        stats.clear()
+        stats.addstr(s)
+        stats.noutrefresh()
+
+    out = []
+    up = True
+    up_event = False
+    down_event = False
+    downtime = datetime.timedelta(0)
+    timer = datetime.timedelta(0)
+    result = {}
+    first_run = True
+    txt_log = []
+    
+    try:
+        #screen = curses.initscr()
+        curses.curs_set(0)
+        (maxy,maxx) = screen.getmaxyx()
+        activity = screen.subwin(1,maxx,0,0)
+        spark = screen.subwin(1,maxx,1,0)
+        stats = screen.subwin(1,maxx,2,0)
+        log = curses.newpad(1000,maxx)
+        screen.clear()
+        
+        add_log("starting to ping %s with an interval of %.0fms\n" % (host,float(timeout)*1000))
+
+        while True:
+            start = datetime.datetime.now()
+            result = pinger(host,timeout=timeout,count=count)
+            (maxy,maxx) = screen.getmaxyx()
+
+
+            if not result['stdout']:
+                continue
+
+            if float(result['loss']) == 100:
+                add_activity('.')
+
+                if up:
+                    up = False
+                    down_event = result
+                    if not first_run:
+                        if up_event:
+                            diff = down_event['date'] - up_event['date']
+                            add_log('Host is now down (%s interval)\n' % (fmt_delta(diff)))
+                        else:
+                            add_log('Host is down\n')
+                timer += datetime.datetime.now() - start
+
+            elif float(result['loss']) == 0:
+                add_activity('!')
+
+                if up == False:
+                    up = True
+                    up_event = result
+                    if not first_run:
+                        if down_event:
+                            diff = up_event['date'] - down_event['date']
+                            downtime += diff
+                            add_log('Host is now up (%s interval)\n' % (fmt_delta(diff)))
+                        else:
+                            add_log('Host is up\n')
+
+                timer = datetime.timedelta(0)
+
+            #add_log(str(result) + "\n")
+            
+            if first_run:
+                first_run = False
+
+            out.append(result)
+            maxspark = maxx - 1
+            maxlist = [ float(d['max']) for d in out ]
+            avglist = [ float(d['avg']) for d in out ]
+            minlist = [ float(d['min']) for d in out ]
+            sparklist = ([0] * (maxspark - len(maxlist))) + maxlist[-maxspark:]
+            add_spark(sparkify( sparklist ).encode('utf_8'))
+
+            add_stats("max %.2f avg %.2f min %.2f total %s lap %s" % (max(maxlist),(sum(avglist)/len(avglist)),min(minlist),fmt_delta(downtime),fmt_delta(timer)))
+
+            curses.doupdate()
+
+    except KeyboardInterrupt:
+        pass
+    except:
+        raise
+
+    #stats = {}
+    #for key in ('loss','sent','received','min','avg','max','mdev'):
+        #stats[key] = [ float(d[key]) for d  in out ]
+    
+    return "%s\nTotal downtime: %s" % (''.join(txt_log),downtime + timer)
+
+    
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    print curses.wrapper(run_pinger)
+

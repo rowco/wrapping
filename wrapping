@@ -21,10 +21,7 @@ def _convert_to_float(i):
         return None
 
 def sparkify(series):
-
     spark_chars = u"▁▂▃▄▅▆▇█"
-    #spark_chars = u"▁▂▃▄▅▆▇█"
-
     series = [ float(i) for i in series ]
     minimum = min(series)
     maximum = max(series)
@@ -68,10 +65,7 @@ def pinger(host=None,interval=60,timeout=1,count=1):
         'mdev':'0',
         }
     
-    try:
-        proc = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    except:
-        raise SystemError(' '.join(cmd))
+    proc = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 
     sleep = float(timeout)*float(count)
     time.sleep(sleep)
@@ -125,7 +119,6 @@ def pinger(host=None,interval=60,timeout=1,count=1):
         pass        
     except ValueError:
         pass
-        raise
     except:
         raise
 
@@ -154,7 +147,16 @@ def run_pinger(screen):
 
 
     def fmt_delta(delta):
-        return '%02d:%02d.%06d' % ((delta.seconds//60)%60,delta.seconds,delta.microseconds)
+        #total_seconds = (delta.microseconds + (delta.seconds + delta.days * 24 * 3600) * 10**6) / 10**6
+        #hours, remainder = divmod(total_seconds, 3600)
+        #minutes, seconds = divmod(remainder, 60)
+        #return '%02d:%02d.%02d' % (hours,minutes,seconds)
+        #return '%02d:%02d.%02d' % ((delta.seconds//60)%60,delta.seconds,round(delta.microseconds,2))
+        #delta.microseconds = round(delta.microseconds,2)
+        return str(delta)
+
+    def round_microseconds(d):
+        d.microseconds = round(d.microseconds,2)
     
     def add_activity(c):
         try:
@@ -206,7 +208,6 @@ def run_pinger(screen):
     txt_log = []
     
     try:
-        #screen = curses.initscr()
         curses.curs_set(0)
         (maxy,maxx) = screen.getmaxyx()
         activity = screen.subwin(1,maxx,0,0)
@@ -235,7 +236,7 @@ def run_pinger(screen):
                     if not first_run:
                         if up_event:
                             diff = down_event['date'] - up_event['date']
-                            add_log('Host is now down (%s interval)\n' % (fmt_delta(diff)))
+                            add_log('Started dropping pings (was up for: %s)\n' % (fmt_delta(diff)))
                         else:
                             add_log('Host is down\n')
                 timer += datetime.datetime.now() - start
@@ -250,7 +251,7 @@ def run_pinger(screen):
                         if down_event:
                             diff = up_event['date'] - down_event['date']
                             downtime += diff
-                            add_log('Host is now up (%s interval)\n' % (fmt_delta(diff)))
+                            add_log('Started responding to pings (was down for: %s)\n' % (fmt_delta(diff)))
                         else:
                             add_log('Host is up\n')
 
@@ -269,7 +270,7 @@ def run_pinger(screen):
             sparklist = ([0] * (maxspark - len(maxlist))) + maxlist[-maxspark:]
             add_spark(sparkify( sparklist ).encode('utf_8'))
 
-            add_stats("max %.2f avg %.2f min %.2f total %s lap %s" % (max(maxlist),(sum(avglist)/len(avglist)),min(minlist),fmt_delta(downtime),fmt_delta(timer)))
+            add_stats("max %.2f avg %.2f min %.2f total %s lap %s" % (max(maxlist),(sum(avglist)/len(avglist)),min(minlist),fmt_delta(downtime).rjust(15),fmt_delta(timer).rjust(15)))
 
             curses.doupdate()
 

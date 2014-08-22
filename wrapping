@@ -65,7 +65,7 @@ def pinger(host=None,interval=60,timeout=1,count=1):
         'mdev':'0',
         }
     
-    proc = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,close_fds=True)
 
     sleep = float(timeout)*float(count)
     time.sleep(sleep)
@@ -81,6 +81,11 @@ def pinger(host=None,interval=60,timeout=1,count=1):
 
     stats_index = 0
     stdout = proc.stdout.readlines()
+
+    proc.stdout.close()
+    proc.stdin.close()
+    proc.stderr.close()
+    del(proc)
 
     for l in stdout:
         if re.search('---',l):
@@ -122,7 +127,6 @@ def pinger(host=None,interval=60,timeout=1,count=1):
     except:
         raise
 
-    del(proc)
     return results
 
 

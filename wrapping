@@ -11,6 +11,7 @@ import shutil
 import curses
 import math, string
 import locale
+import gc
 locale.setlocale(locale.LC_ALL,"")
 
 
@@ -46,6 +47,9 @@ summ_re = re.compile('(\d+) packets transmitted, (\d+)(?: packets)? received,(?:
 stat_re = re.compile('(?:rtt|round-trip) min/avg/max/(?:mdev|stddev) = ([\d\.]+)/([\d\.]+)/([\d\.]+)/([\d\.]+) [a-z]+')
 
 def pinger(host=None,interval=60,timeout=1,count=1):
+
+    # Attempt to free up stale file handles
+    gc.collect()
 
     logger = logging.getLogger('pinger')
 
@@ -267,6 +271,9 @@ def run_pinger(screen):
                 first_run = False
 
             out.append(result)
+            #cap out to 1000 results
+            while len(out) > 1000:
+                out.pop(0)
             maxspark = maxx - 1
             maxlist = [ float(d['max']) for d in out ]
             avglist = [ float(d['avg']) for d in out ]
